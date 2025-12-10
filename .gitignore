@@ -3,6 +3,22 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PowerShell artifacts
+*.ps1xml
+TestResults.xml
+
+# Log files
+*.log
+
 # User-specific files
 *.rsuser
 *.suo

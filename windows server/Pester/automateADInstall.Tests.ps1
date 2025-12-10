@@ -1,18 +1,21 @@
 #region Pester Tests
-Import-Module "$PSScriptRoot\automateADInstall.psm1" -Force
+Import-Module "$PSScriptRoot\..\Modules\Logging.psm1" -Force
+Import-Module "$PSScriptRoot\..\Modules\automateADInstall.psm1" -Force
 
 Describe "Logging Functionality" {
     It "Should write an INFO entry to the log file" {
         $message = "Test info message"
         Write-Log $message 'INFO'
-        $log = Get-Content $Global:LogFile | Select-String $message
+        $logFile = Get-LogFilePath
+        $log = Get-Content $logFile | Select-String $message
         $log | Should -Not -BeNullOrEmpty
         $log.ToString() | Should -Match "\[INFO\] $message"
     }
     It "Should write an ERROR entry to the log file" {
         $message = "Test error message"
-        Write-Log $message 'ERROR'
-        $log = Get-Content $Global:LogFile | Select-String $message
+        Write-Log $message 'ERROR' -ErrorAction SilentlyContinue
+        $logFile = Get-LogFilePath
+        $log = Get-Content $logFile | Select-String $message
         $log | Should -Not -BeNullOrEmpty
         $log.ToString() | Should -Match "\[ERROR\] $message"
     }
@@ -26,12 +29,9 @@ Describe "New-EnvPath" {
 }
 
 Describe "Test-Paths" {
-    It "Should write log if path does not exist" {
+    It "Should throw error if path does not exist" {
         $nonExistentPath = "C:\DefinitelyNotARealPath"
-        Test-Paths -Paths @($nonExistentPath)
-        $log = Get-Content $Global:LogFile | Select-String $nonExistentPath
-        $log | Should -Not -BeNullOrEmpty
-        $log.ToString() | Should -Match "does not exists"
+        { Test-Paths -Paths @($nonExistentPath) } | Should -Throw
     }
 }
 

@@ -1,4 +1,11 @@
 $ErrorActionPreference = 'Stop'
+
+# Import centralized logging module
+Import-Module "$PSScriptRoot\Logging.psm1" -Force
+
+# Set log file path for this module
+Set-LogFilePath -Path "$env:TEMP\ADDeployment_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+
 $PSDefaultParameterValues = @{
   'Invoke-ADDSForest:DatabasePath'           = "$env:SYSTEMDRIVE\Windows"
   'Invoke-ADDSForest:LogPath'                = "$env:SYSTEMDRIVE\Windows\NTDS\"
@@ -8,29 +15,6 @@ $PSDefaultParameterValues = @{
   'Invoke-ADDSDomainController:LogPath'      = "$env:SYSTEMDRIVE\Windows\NTDS\"
   'Invoke-ADDSDomainController:SYSVOLPath'   = "$env:SYSTEMDRIVE\Windows"
 }
-
-#region Logging Setup
-$Global:LogFile = "$env:TEMP\ADDeployment_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-function Write-Log {
-  <#
-.SYNOPSIS
-Writes a message to the log file with timestamp and log level.
-.DESCRIPTION
-Supports multiple log levels: INFO, DEBUG, WARN, ERROR.
-#>
-  param (
-    [Parameter(Mandatory)][string]$Message,
-    [Parameter()][ValidateSet('INFO', 'DEBUG', 'WARN', 'ERROR')][string]$Level = 'INFO'
-  )
-  $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-  $entry = "[$timestamp] [$Level] $Message"
-  Add-Content -Path $Global:LogFile -Value $entry
-  if ($Level -eq 'ERROR') { Write-Error $Message }
-  elseif ($Level -eq 'WARN') { Write-Warning $Message }
-  elseif ($Level -eq 'DEBUG') { Write-Verbose $Message }
-  else { Write-Host $Message }
-}
-#endregion
 
 #region Pre-flight Checks
 function Test-Prerequisites {
@@ -196,8 +180,8 @@ Creates a new AD DS forest.
     [string]$DomainName,
     [string]$DomainNetbiosName,
     [securestring]$SafeModeAdministratorPassword,
-    [ValidateSet("Win2008", "Win2008R2", "Win2012", "Win2012R2", "Win2025", "Default", "WinThreshold")][string]$DomainMode = "Win2025",
-    [ValidateSet("Win2008", "Win2008R2", "Win2012", "Win2012R2", "Win2025", "Default", "WinThreshold")][string]$ForestMode = "Win2025",
+    [ValidateSet("Win2008", "Win2008R2", "Win2012", "Win2012R2", "Win2016", "Win2019", "Win2022", "Default")][string]$DomainMode = "Default",
+    [ValidateSet("Win2008", "Win2008R2", "Win2012", "Win2012R2", "Win2016", "Win2019", "Win2022", "Default")][string]$ForestMode = "Default",
     [string]$DatabasePath,
     [string]$LogPath,
     [string]$SYSVOLPATH,
@@ -215,7 +199,7 @@ Creates a new AD DS forest.
     $SYSVOL_PATH = New-EnvPath -Path $SYSVOLPATH -ChildPath 'sysvol'
     $SafePwd = Get-SafeModePassword -Password $SafeModeAdministratorPassword
 
-    $CommonParams = @{
+    $installParams = @{
       DomainName                    = $DomainName
       DataBasePath                  = $DATABASE_PATH
       LogPath                       = $LOG_PATH
@@ -224,9 +208,9 @@ Creates a new AD DS forest.
       InstallDNS                    = $InstallDNS.IsPresent
     }
     foreach ($p in 'DomainMode', 'ForestMode', 'DomainNetBiosName', 'Force') {
-      if ($PSBoundParameters.ContainsKey($p)) { $CommonParams[$p] = $PSBoundParameters[$p] }
+      if ($PSBoundParameters.ContainsKey($p)) { $installParams[$p] = $PSBoundParameters[$p] }
     }
-    Install-ADDSForest @CommonParams
+    Install-ADDSForest @installParams
     Write-Log "AD DS Forest creation for $DomainName started." 'INFO'
   }
   catch {
@@ -247,8 +231,8 @@ Invokes AD DS forest creation.
     [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$DomainName,
     [Parameter()][securestring]$SafeModeAdministratorPassword,
     [Parameter()][string]$DomainNetBiosName,
-    [Parameter()][string]$DomainMode = 'Win2025',
-    [Parameter()][string]$ForestMode = 'Win2025',
+    [Parameter()][string]$DomainMode = 'Default',
+    [Parameter()][string]$ForestMode = 'Default',
     [Parameter()][string]$DatabasePath,
     [Parameter()][string]$SysvolPath,
     [Parameter()][string]$LogPath,
@@ -310,11 +294,11 @@ Installs additional domain controller in existing forest.
     $SYSVOL_PATH = New-EnvPath -Path $SysvolPath -ChildPath 'sysvol'
 
     Write-Log "Creating credential object for the domain administrator." 'DEBUG'
-    $CredPassword = Read-Host -AsSecureString -Prompt "Enter Secure password for $DomainAdministrator"
+    $CredPassword = Read-Host -AsSecureString -Prompt "Enter secure password for $DomainAdministrator"
     $DomainCredential = New-Object System.Management.Automation.PSCredential($DomainAdministrator, $CredPassword)
     $SafePwd = Get-SafeModePassword -Password $SafeModeAdministratorPassword
 
-    $CommonParams = @{
+    $installParams = @{
       DomainName                    = $DomainName
       SiteName                      = $SiteName
       SafeModeAdministratorPassword = $SafePwd
@@ -324,10 +308,10 @@ Installs additional domain controller in existing forest.
       InstallDNS                    = $InstallDNS.IsPresent
       Credential                    = $DomainCredential
     }
-    if ($Force.IsPresent) { $CommonParams['Force'] = $true }
+    if ($Force.IsPresent) { $installParams['Force'] = $true }
 
     if ($PSCmdlet.ShouldProcess("Install additional domain controller for $DomainName")) {
-      Install-ADDSDomainController @CommonParams
+      Install-ADDSDomainController @installParams
       Write-Log "Installation of additional domain controller completed successfully." 'INFO'
     }
 
@@ -383,5 +367,5 @@ Invokes installation of additional domain controller.
 #endregion
 
 #region Export Module function
-Export-ModuleMember -Function Write-Log, Test-Prerequisites, Invoke-PSModules, Invoke-ADModule, New-EnvPath, Test-Paths, Get-SafeModePassword, New-ADDSForest, Invoke-ADDSForest, New-ADDSDomainController, Invoke-ADDSDomainController
+Export-ModuleMember -Function Test-Prerequisites, Invoke-PSModules, Invoke-ADModule, New-EnvPath, Get-SafeModePassword, New-ADDSForest, Invoke-ADDSForest, New-ADDSDomainController, Invoke-ADDSDomainController
 #endregion

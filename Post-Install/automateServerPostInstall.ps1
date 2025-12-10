@@ -4,17 +4,10 @@
  # Usage: Call Invoke-PostInstallTasks with the appropriate parameters.
 #>
 
-#region Logging Setup
-$Global:LogFile = "$env:TEMP\PostInstallTasks_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-function Write-Log {
-  param (
-    [string]$Message,
-    [string]$Level = 'INFO'
-  )
-  $entry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [$Level] $Message"
-  Add-Content -Path $Global:LogFile -Value $entry
-  Write-Verbose $entry
-}
+#region Import centralized logging module
+$modulePath = Join-Path $PSScriptRoot '..\windows server\Modules\Logging.psm1'
+Import-Module $modulePath -Force
+Set-LogFilePath -Path "$env:TEMP\PostInstallTasks_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 #endregion
 
 #region RDP Enablement
@@ -38,7 +31,12 @@ function Invoke-RDPEnablement {
   try {
     for ($i = 0; $i -lt $name.Length; $i++) {
       if (Test-Path $Path[$i]) {
-        Set-ItemProperty -Path $Path[$i] -Name $name[$i] -Value ([int]$Value[$i])
+        $setItemParams = @{
+          Path  = $Path[$i]
+          Name  = $name[$i]
+          Value = ([int]$Value[$i])
+        }
+        Set-ItemProperty @setItemParams
       }
       else {
         Write-Log "Registry path not found: $($Path[$i])" 'ERROR'
@@ -52,7 +50,14 @@ function Invoke-RDPEnablement {
   finally {
     Write-Log "Enabling RDP firewall rules..."
     try {
-      Set-NetFirewallRule -DisplayGroup 'Remote Desktop' -Enabled True -Action Allow -Profile Private -Direction Inbound
+      $firewallParams = @{
+        DisplayGroup = 'Remote Desktop'
+        Enabled      = $true
+        Action       = 'Allow'
+        Profile      = 'Private'
+        Direction    = 'Inbound'
+      }
+      Set-NetFirewallRule @firewallParams
       Write-Log "RDP firewall rules enabled successfully."
     }
     catch {
@@ -95,8 +100,24 @@ function Invoke-NetworkInterfaceConfigurations {
       }
 
       Write-Log "Assigning static IP configuration..."
-      New-NetIPAddress -IPAddress $IPAddress -PrefixLength $PrefixLength -InterfaceIndex $InterfaceIndex -ErrorAction Stop
-      Write-Log "Static IP configuration applied to $IPAddress/$PrefixLength."
+      
+      # Idempotency check: Only assign if IP is not already configured
+      $existingIP = Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+        Where-Object { $_.IPAddress -eq $IPAddress }
+      
+      if ($null -eq $existingIP) {
+        $ipParams = @{
+          IPAddress      = $IPAddress
+          PrefixLength   = $PrefixLength
+          InterfaceIndex = $InterfaceIndex
+          ErrorAction    = 'Stop'
+        }
+        New-NetIPAddress @ipParams
+        Write-Log "Static IP configuration applied to $IPAddress/$PrefixLength."
+      }
+      else {
+        Write-Log "IP address $IPAddress is already configured on interface." 'INFO'
+      }
 
       $IpConfig = Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq $IPAddress }
       if ($null -eq $IpConfig) {
@@ -122,12 +143,18 @@ function Invoke-NetworkInterfaceConfigurations {
 
       if ($null -ne $existingRoute) {
         Write-Log "Existing route found. Removing..."
-        $existingRoute | Remove-NetRoute -ErrorAction Stop
+        $existingRoute | Remove-NetRoute -Confirm:$false -ErrorAction Stop
         Write-Log "Old route removed."
       }
 
       Write-Log "Adding route via $NextHop..."
-      New-NetRoute -InterfaceIndex $InterfaceIndex -NextHop $NextHop -DestinationPrefix $DestinationPrefix -ErrorAction Stop
+      $routeParams = @{
+        InterfaceIndex    = $InterfaceIndex
+        NextHop           = $NextHop
+        DestinationPrefix = $DestinationPrefix
+        ErrorAction       = 'Stop'
+      }
+      New-NetRoute @routeParams
       Write-Log "Route to internet configured."
     }
 
@@ -137,14 +164,47 @@ function Invoke-NetworkInterfaceConfigurations {
       }
 
       Write-Log "Configuring DNS servers: $($DnsServer -join ', ')"
-      Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses $DnsServer -ErrorAction Stop
-      Write-Log "DNS configuration complete."
+      
+      # Idempotency check: Only set if DNS servers are different
+      $currentDns = (Get-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4).ServerAddresses
+      $dnsChanged = $false
+      
+      if ($null -eq $currentDns -or $currentDns.Count -ne $DnsServer.Count) {
+        $dnsChanged = $true
+      }
+      else {
+        for ($i = 0; $i -lt $DnsServer.Count; $i++) {
+          if ($currentDns[$i] -ne $DnsServer[$i]) {
+            $dnsChanged = $true
+            break
+          }
+        }
+      }
+      
+      if ($dnsChanged) {
+        $dnsParams = @{
+          InterfaceIndex  = $InterfaceIndex
+          ServerAddresses = $DnsServer
+          ErrorAction     = 'Stop'
+        }
+        Set-DnsClientServerAddress @dnsParams
+        Write-Log "DNS configuration complete."
+      }
+      else {
+        Write-Log "DNS servers are already configured correctly." 'INFO'
+      }
     }
 
     if ($DisableIPv6.IsPresent) {
       Write-Log "Disabling IPv6..."
       $adapterName = (Get-NetAdapter -InterfaceIndex $InterfaceIndex).Name
-      Set-NetAdapterBinding -Name $adapterName -ComponentID ms_tcpip6 -Enabled $false -ErrorAction Stop
+      $bindingParams = @{
+        Name        = $adapterName
+        ComponentID = 'ms_tcpip6'
+        Enabled     = $false
+        ErrorAction = 'Stop'
+      }
+      Set-NetAdapterBinding @bindingParams
       Write-Log "IPv6 disabled on adapter $adapterName."
     }
 
@@ -155,7 +215,8 @@ function Invoke-NetworkInterfaceConfigurations {
   }
   finally {
     Write-Log "Network interface configuration complete."
-    Write-Log "Log file location: $Global:LogFile"
+    $logPath = Get-LogFilePath
+    Write-Log "Log file location: $logPath"
   }
 }
 #endregion
@@ -236,26 +297,33 @@ try {
   $DestinationPrefix = '0.0.0.0/0'
   $DnsServer = @('192.168.3.1','127.0.0.1')
 
-  Invoke-PostInstallTasks -IPAddress $IPAddress -PrefixLength $PrefixLength -NextHop $NextHop `
-    -DestinationPrefix $DestinationPrefix -DnsServer $DnsServer -AssignStaticIP -DisableIPv6 `
-    -SetDnsServer -RouteToInternet -EnableRDP
+  $postInstallParams = @{
+    IPAddress         = $IPAddress
+    PrefixLength      = $PrefixLength
+    NextHop           = $NextHop
+    DestinationPrefix = $DestinationPrefix
+    DnsServer         = $DnsServer
+    AssignStaticIP    = $true
+    DisableIPv6       = $true
+    SetDnsServer      = $true
+    RouteToInternet   = $true
+    EnableRDP         = $true
+  }
+  
+  Invoke-PostInstallTasks @postInstallParams
   Write-Log "Post-install tasks invoked successfully."
-  Write-Host "Post-install tasks completed. Check the log file at $Global:LogFile for details." -ForegroundColor Green
+  $logPath = Get-LogFilePath
+  Write-Host "Post-install tasks completed. Check the log file at $logPath for details." -ForegroundColor Green
 }
 catch {
   Write-Log "An error occurred during post-install tasks: $_" 'ERROR'
-  Write-Host "An error occurred during post-install tasks. Please check the log file at $Global:LogFile for details." -ForegroundColor Red
+  $logPath = Get-LogFilePath
+  Write-Host "An error occurred during post-install tasks. Please check the log file at $logPath for details." -ForegroundColor Red
   throw "Post-install tasks failed. Check the log file for more information."
 }
 finally {
   Write-Log "Post-install tasks completed."
-  Write-Host "Post-install tasks completed. Log file created at: $Global:LogFile" -ForegroundColor Cyan
-  Write-Host "You can now proceed with the next steps in your deployment process." -ForegroundColor Cyan
-  Write-Host "Thank you for using this script!" -ForegroundColor Yellow
-  Write-Host "For any issues, please refer to the log file or contact support."
-  Write-Host "Have a great day!" -ForegroundColor Magenta
-  Write-Host "If you have any feedback or suggestions, please let us know." -ForegroundColor Yellow
-  Write-Host "You can also check the documentation for more information." -ForegroundColor Cyan
-  Write-Host "Thank you for using the post-install tasks script!" -ForegroundColor Cyan
+  $logPath = Get-LogFilePath
+  Write-Host "Post-install tasks completed. Log file created at: $logPath" -ForegroundColor Cyan
 }
 #endregion
