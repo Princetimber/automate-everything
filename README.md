@@ -140,7 +140,7 @@ $password = Read-Host -AsSecureString -Prompt "Enter Safe Mode password"
 Set-Secret -Name ADSafeModePassword -Secret $password -Vault LocalStore
 
 # Retrieve and use the secret
-$safeModePassword = Get-Secret -Name ADSafeModePassword -Vault LocalStore -AsPlainText | ConvertTo-SecureString -AsPlainText -Force
+$safeModePassword = Get-Secret -Name ADSafeModePassword -Vault LocalStore -AsSecureString
 
 $forestParams = @{
     DomainName                    = "contoso.local"

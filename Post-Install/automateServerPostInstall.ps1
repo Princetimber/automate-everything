@@ -143,7 +143,11 @@ function Invoke-NetworkInterfaceConfigurations {
 
       if ($null -ne $existingRoute) {
         Write-Log "Existing route found. Removing..."
-        $existingRoute | Remove-NetRoute -Confirm:$false -ErrorAction Stop
+        $removeRouteParams = @{
+          Confirm     = $false
+          ErrorAction = 'Stop'
+        }
+        $existingRoute | Remove-NetRoute @removeRouteParams
         Write-Log "Old route removed."
       }
 
