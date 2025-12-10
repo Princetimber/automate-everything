@@ -13,6 +13,10 @@ jobs:
   test:
     runs-on: windows-latest
     
+    permissions:
+      contents: read
+      checks: write
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
