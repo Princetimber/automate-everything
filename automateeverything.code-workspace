@@ -20,7 +20,7 @@
   },
   "settings": {
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.defaultFormatter": "prettier.prettier-vscode",
     "files.associations": {
       "*.ps1": "powershell"
     },
